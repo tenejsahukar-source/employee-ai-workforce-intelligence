@@ -1,0 +1,39 @@
+version: '3.9'
+
+services:
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # This tells FastAPI how to connect to the Postgres container below
+      - DATABASE_URL=postgresql://postgres:Tenej@postgres:5432/employee_ai_db
+    depends_on:
+      postgres:
+        condition: service_healthy # Waits for DB to be totally ready before starting FastAPI
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Tenej
+      POSTGRES_DB: employee_ai_db
+    ports:
+      - "5432:5432"
+    volumes:
+      # This saves your database data to your hard drive so it doesn't delete on restart
+      - pgdata:/var/lib/postgresql/data 
+    healthcheck:
+      # Constantly pings the database until it confirms it is ready to accept connections
+      test: ["CMD-SHELL", "pg_isready -U postgres -d employee_ai_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:
