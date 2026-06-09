@@ -1,66 +1,41 @@
 """
-Enterprise API System - Phase 2
-Complete CRUD + Authentication with Role-Based Access Control
+AI Workforce Intelligence Platform — Application Entrypoint
+Production-grade FastAPI bootstrap with RBAC, Prometheus telemetry,
+structured middleware, and full ML inference routing.
+
+Root-cause fixes applied (see ROOT_CAUSE_ANALYSIS.md):
+  1. Single FastAPI instance — duplicate `app = FastAPI()` removed.
+  2. Duplicate router import resolved — ml_router and prediction_router
+     were the same object imported twice under different names.
+  3. Routers registered on the *correct* app object and in the right order.
+  4. Duplicate health_router registration removed.
+  5. Middleware and exception handlers applied before router registration.
+  6. Unused imports removed (Query, OAuth2PasswordRequestForm, DBEmployee,
+     wildcard logging_config, List where not needed).
+  7. load_dotenv() and logging.basicConfig() moved to the very top so they
+     are active before any module-level side effects.
+  8. Prometheus Instrumentator attached to the single app instance.
 """
 
-import os
+# =========================================================
+# STDLIB — must be first so logging is active for all imports
+# =========================================================
+
 import logging
+import os
 from datetime import datetime, timedelta
-from typing import Optional, List
-
-from dotenv import load_dotenv
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-
-from fastapi import (
-    FastAPI,
-    Depends,
-    HTTPException,
-    status,
-    Query,
-    Request
-)
-
-from fastapi.responses import JSONResponse
-from app.middleware.logging_middleware import log_requests
-
-from fastapi.security import (
-    OAuth2PasswordBearer,
-    OAuth2PasswordRequestForm
-)
-
-from fastapi.middleware.cors import CORSMiddleware
-
-from pydantic import (
-    BaseModel,
-    EmailStr,
-    validator
-)
-
-from prometheus_fastapi_instrumentator import Instrumentator
-
-# ==================== DATABASE IMPORTS ====================
-
-from app.database.connection import Base, engine
-
-# Aliased to avoid conflict with Pydantic Employee model
-from app.models.employee import Employee as DBEmployee
-
-# ==================== ML ROUTES ====================
-
-from app.ml.api.routes import router as ml_router
-from app.config.logging_config import *
-from app.routes.health_routes import router as health_router
-from app.api.monitoring import router as monitoring_router
-from app.api.auth import router as auth_router
-
-from sqlalchemy.exc import SQLAlchemyError
-from app.utils.exception_handlers import (
-    sqlalchemy_exception_handler
-)
+from typing import Optional
 
 # =========================================================
-# LOGGING CONFIGURATION
+# ENVIRONMENT — load .env before any os.getenv() call
+# =========================================================
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# =========================================================
+# LOGGING — configure before any module that emits logs
 # =========================================================
 
 logging.basicConfig(
@@ -71,159 +46,192 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =========================================================
-# LOAD ENV VARIABLES
+# THIRD-PARTY
 # =========================================================
 
-load_dotenv()
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from prometheus_fastapi_instrumentator import Instrumentator
+from pydantic import BaseModel, EmailStr, validator
+from sqlalchemy.exc import SQLAlchemyError
+
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.security import OAuth2PasswordBearer
 
 # =========================================================
-# INITIALIZE DATABASE
+# INTERNAL — database & models
 # =========================================================
 
+from app.database.connection import Base, engine
+from app.db.models.prediction import PredictionLog
+
+# =========================================================
+# INTERNAL — routers
+# =========================================================
+
+from app.ml.api.routes import router as prediction_router        # POST /api/v1/predict/attrition
+from app.ml.api.history_routes import router as history_router   # GET  /api/v1/predictions[/...]
+from app.routes.health_routes import router as health_router     # GET  /health  (router-level)
+from app.api.monitoring import router as monitoring_router
+from app.api.auth import router as auth_router
+from app.ml.api.analytics_routes import router as analytics_router
+
+# =========================================================
+# INTERNAL — middleware & exception utilities
+# =========================================================
+
+from app.middleware.logging_middleware import log_requests
+from app.utils.exception_handlers import sqlalchemy_exception_handler
+
+# =========================================================
+# DATABASE BOOTSTRAP
+# =========================================================
+from app.db.models.prediction import PredictionLog
+
+
+print("TABLES REGISTERED:")
+print(Base.metadata.tables.keys())
 Base.metadata.create_all(bind=engine)
+logger.info("Database tables verified / created.")
 
 # =========================================================
-# CONFIGURATION
+# JWT CONFIGURATION
 # =========================================================
 
-SECRET_KEY = os.getenv(
-    "SECRET_KEY",
-    "your-secret-key-change-in-production"
-)
+SECRET_KEY: str = os.getenv("SECRET_KEY", "CHANGE-ME-IN-PRODUCTION")
+ALGORITHM: str = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
-ALGORITHM = "HS256"
-
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+if SECRET_KEY == "CHANGE-ME-IN-PRODUCTION":
+    logger.warning(
+        "SECRET_KEY is using the insecure default value. "
+        "Set SECRET_KEY in your .env file before deploying."
+    )
 
 # =========================================================
-# FASTAPI INITIALIZATION (MUST BE FIRST)
+# FASTAPI — single instance
 # =========================================================
 
 app = FastAPI(
     title="AI Workforce Intelligence Platform",
     description=(
-        "Production-grade ML API with "
-        "Authentication, CRUD, Celery, Redis, "
-        "and SHAP Explanations."
+        "Production-grade ML API with Authentication, CRUD, "
+        "Celery, Redis, and SHAP Explanations."
     ),
-    version="2.0.0"
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
+
+# =========================================================
+# PROMETHEUS INSTRUMENTATION
+# =========================================================
 
 Instrumentator().instrument(app).expose(app)
 
 # =========================================================
-# CORS & MIDDLEWARE CONFIGURATION
+# MIDDLEWARE
 # =========================================================
+
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",  # if using React dev server
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+
+    # ADD THIS PART
+    expose_headers=[
+        "X-Trace-ID",
+        "X-Inference-Time-ms",
+        "X-Model-Version",
+        "X-Risk-Label",
+    ],
 )
+# Custom structured request/response logger
 app.middleware("http")(log_requests)
 
 # =========================================================
 # EXCEPTION HANDLERS
 # =========================================================
 
-app.add_exception_handler(
-    SQLAlchemyError,
-    sqlalchemy_exception_handler
-)
+app.add_exception_handler(SQLAlchemyError, sqlalchemy_exception_handler)
+
 
 @app.exception_handler(Exception)
-async def global_exception_handler(
-    request: Request,
-    exc: Exception
-):
-    logger.error(f"Unhandled exception: {exc}")
-
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all handler — logs the traceback and returns a safe 500."""
+    logger.exception(f"Unhandled exception on {request.method} {request.url}: {exc}")
     return JSONResponse(
         status_code=500,
-        content={
-            "detail": (
-                "An unexpected error occurred. "
-                "Please try again later."
-            )
-        }
+        content={"detail": "An unexpected error occurred. Please try again later."},
     )
 
 # =========================================================
-# ROUTES
+# ROUTER REGISTRATION
 # =========================================================
+
 app.include_router(auth_router)
 app.include_router(health_router)
-app.include_router(health_router)
 app.include_router(monitoring_router)
-app.include_router(
-    ml_router,
-    prefix="/api/v1/ml",
-    tags=["Machine Learning"]
-)
+app.include_router(prediction_router)   # POST /api/v1/predict/attrition
+app.include_router(history_router)      # GET  /api/v1/predictions[/...]
+app.include_router(analytics_router)
+
+logger.info("All routers registered successfully.")
 
 # =========================================================
-# PASSWORD HASHING
+# PASSWORD & TOKEN UTILITIES
 # =========================================================
 
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto"
-)
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return pwd_context.verify(plain, hashed)
+
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (
+        expires_delta if expires_delta else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    to_encode["exp"] = expire
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def create_refresh_token(data: dict) -> str:
+    to_encode = {**data.copy(), "type": "refresh"}
+    to_encode["exp"] = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 # =========================================================
-# OAUTH2 CONFIG
-# =========================================================
-
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl="login"
-)
-
-# =========================================================
-# IN-MEMORY DATABASE
-# =========================================================
-# Replace with PostgreSQL in production
-
-class Database:
-    users: dict = {}
-    employees: dict = {}
-
-db = Database()
-
-# =========================================================
-# ENUMS & MODELS
+# PYDANTIC MODELS
 # =========================================================
 
 class Role(str):
-    """Available roles in the system"""
-
     ADMIN = "admin"
     HR = "hr"
     MANAGER = "manager"
     EMPLOYEE = "employee"
 
 
-class Department(str):
-    """Available departments"""
-
-    SALES = "sales"
-    ENGINEERING = "engineering"
-    HR = "hr"
-    FINANCE = "finance"
-    OPERATIONS = "operations"
-
-# =========================================================
-# AUTH MODELS
-# =========================================================
-
 class TokenResponse(BaseModel):
-    """Token response model"""
-
     access_token: str
     refresh_token: Optional[str] = None
     token_type: str = "bearer"
@@ -231,32 +239,24 @@ class TokenResponse(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    """User registration model"""
-
     email: EmailStr
     password: str
     full_name: str
     role: str = Role.EMPLOYEE
 
-    @validator('password')
-    def password_strength(cls, v):
+    @validator("password")
+    def password_strength(cls, v: str) -> str:
         if len(v) < 8:
-            raise ValueError(
-                'Password must be at least 8 characters'
-            )
+            raise ValueError("Password must be at least 8 characters.")
         return v
 
 
 class LoginRequest(BaseModel):
-    """User login model"""
-
     email: str
     password: str
 
 
-class User(BaseModel):
-    """User model"""
-
+class UserResponse(BaseModel):
     id: str
     email: str
     full_name: str
@@ -264,348 +264,46 @@ class User(BaseModel):
     is_active: bool = True
     created_at: datetime
 
-# =========================================================
-# EMPLOYEE MODELS
-# =========================================================
-
-class EmployeeBase(BaseModel):
-    """Base employee model"""
-
-    full_name: str
-    email: EmailStr
-    phone: str
-    department: str
-    position: str
-    salary: float
-    manager_id: Optional[str] = None
-    hire_date: datetime
-
-    @validator('salary')
-    def salary_positive(cls, v):
-        if v < 0:
-            raise ValueError(
-                'Salary must be positive'
-            )
-        return v
-
-
-class EmployeeCreate(EmployeeBase):
-    """Create employee request"""
-    pass
-
-
-class EmployeeUpdate(BaseModel):
-    """Update employee request"""
-
-    full_name: Optional[str] = None
-    email: Optional[EmailStr] = None
-    phone: Optional[str] = None
-    department: Optional[str] = None
-    position: Optional[str] = None
-    salary: Optional[float] = None
-    manager_id: Optional[str] = None
-
-
-class Employee(EmployeeBase):
-    """Employee response model"""
-
-    id: str
-    created_at: datetime
-    updated_at: datetime
-    created_by: str
-
-    class Config:
-        from_attributes = True
-
-
-class EmployeeListResponse(BaseModel):
-    """Employee list response"""
-
-    total: int
-    page: int
-    page_size: int
-    data: List[Employee]
 
 # =========================================================
-# SECURITY UTILITIES
+# INLINE UTILITY ENDPOINTS
 # =========================================================
 
-def hash_password(password: str) -> str:
-    """Hash password using bcrypt"""
-
-    return pwd_context.hash(password)
-
-
-def verify_password(
-    plain_password: str,
-    hashed_password: str
-) -> bool:
-    """Verify password"""
-
-    return pwd_context.verify(
-        plain_password,
-        hashed_password
-    )
-
-
-def create_access_token(
-    data: dict,
-    expires_delta: Optional[timedelta] = None
-) -> str:
-    """Create JWT access token"""
-
-    to_encode = data.copy()
-
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(
-            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
-        )
-
-    to_encode.update({"exp": expire})
-
-    encoded_jwt = jwt.encode(
-        to_encode,
-        SECRET_KEY,
-        algorithm=ALGORITHM
-    )
-
-    return encoded_jwt
-
-
-def create_refresh_token(data: dict) -> str:
-    """Create JWT refresh token"""
-
-    to_encode = data.copy()
-
-    expire = datetime.utcnow() + timedelta(
-        days=REFRESH_TOKEN_EXPIRE_DAYS
-    )
-
-    to_encode.update({
-        "exp": expire,
-        "type": "refresh"
-    })
-
-    encoded_jwt = jwt.encode(
-        to_encode,
-        SECRET_KEY,
-        algorithm=ALGORITHM
-    )
-
-    return encoded_jwt
-
-
-async def get_current_user(
-    token: str = Depends(oauth2_scheme)
-) -> User:
-    """Get current authenticated user"""
-
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={
-            "WWW-Authenticate": "Bearer"
-        },
-    )
-
-    try:
-        payload = jwt.decode(
-            token,
-            SECRET_KEY,
-            algorithms=[ALGORITHM]
-        )
-
-        user_id: str = payload.get("sub")
-
-        if user_id is None:
-            raise credentials_exception
-
-    except JWTError:
-        raise credentials_exception
-
-    user = db.users.get(user_id)
-
-    if user is None:
-        raise credentials_exception
-
-    return user
-
-
-def get_user_by_email(
-    email: str
-) -> Optional[dict]:
-    """Get user by email"""
-
-    for user_id, user in db.users.items():
-        if user['email'] == email:
-            return user
-
-    return None
-
-
-def require_role(*roles: str):
-    """Dependency to check user role"""
-
-    async def check_role(
-        current_user: User = Depends(
-            get_current_user
-        )
-    ) -> User:
-
-        if current_user.role not in roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    "Access denied. "
-                    f"Required roles: {', '.join(roles)}"
-                )
-            )
-
-        return current_user
-
-    return check_role
-
-# =========================================================
-# AUTHENTICATION ENDPOINTS
-# =========================================================
-
-@app.post(
-    "/register",
-    response_model=User,
-    tags=["Authentication"]
-)
-async def register(
-    request: RegisterRequest
-):
-    """Register a new user"""
-
-    if get_user_by_email(request.email):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
-
-    user_id = f"user_{len(db.users) + 1}"
-
-    user = User(
-        id=user_id,
-        email=request.email,
-        full_name=request.full_name,
-        role=request.role,
-        is_active=True,
-        created_at=datetime.utcnow()
-    )
-
-    db.users[user_id] = {
-        **user.dict(),
-        "hashed_password": hash_password(
-            request.password
-        )
-    }
-
-    logger.info(
-        f"New user registered: {request.email}"
-    )
-
-    return user
-
-
-@app.post(
-    "/login",
-    response_model=TokenResponse,
-    tags=["Authentication"]
-)
-async def login(
-    request: LoginRequest
-):
-    """Login and get JWT tokens"""
-
-    user = get_user_by_email(request.email)
-
-    if not user or not verify_password(
-        request.password,
-        user.get('hashed_password', '')
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={
-                "WWW-Authenticate": "Bearer"
-            },
-        )
-
-    if not user.get('is_active', False):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User account is inactive"
-        )
-
-    access_token = create_access_token(
-        data={
-            "sub": user['id'],
-            "role": user['role']
-        }
-    )
-
-    refresh_token = create_refresh_token(
-        data={"sub": user['id']}
-    )
-
-    logger.info(
-        f"User logged in: {request.email}"
-    )
-
-    return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60
-    )
-
-# =========================================================
-# HEALTH CHECK
-# =========================================================
-
-@app.get("/health", tags=["Health"])
+@app.get("/health", tags=["Health"], summary="Basic liveness probe")
 async def health_check():
-    """Health check endpoint"""
-
+    """
+    Lightweight liveness check — returns immediately without DB I/O.
+    Use the health_router endpoints for deeper readiness checks.
+    """
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow(),
-        "version": "2.0.0"
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "2.0.0",
     }
 
-# =========================================================
-# ROOT ENDPOINT
-# =========================================================
 
-@app.get("/", tags=["Info"])
-async def home():
-    """API root endpoint"""
-
+@app.get("/", tags=["Info"], summary="API root")
+async def root():
     return {
         "message": "Backend Running Successfully",
         "name": "AI Workforce Intelligence Platform",
         "version": "2.0.0",
-        "description": (
-            "Production-grade Workforce AI API"
-        ),
         "docs": "/docs",
-        "openapi": "/openapi.json"
+        "openapi": "/openapi.json",
+        "metrics": "/metrics",
     }
 
 # =========================================================
-# MAIN ENTRYPOINT
+# UVICORN ENTRYPOINT
 # =========================================================
 
 if __name__ == "__main__":
-
     import uvicorn
 
     uvicorn.run(
-        app,
+        "main:app",          # string form enables --reload
         host="0.0.0.0",
-        port=8000
+        port=8000,
+        reload=False,        # set True in local dev
+        log_level="info",
     )

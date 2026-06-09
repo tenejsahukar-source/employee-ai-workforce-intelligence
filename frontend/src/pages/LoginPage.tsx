@@ -15,26 +15,29 @@ export function LoginPage() {
     e.preventDefault();
 
     try {
-
       console.log("EMAIL:", email);
       console.log("PASSWORD:", password);
 
-      const response = await loginUser(
-        email,
-        password
+      // 1. Make the actual network request to your backend
+      const response = await loginUser(email, password);
+
+      // 2. Store the token so the session persists
+      localStorage.setItem("access_token", response.access_token);
+      console.log(
+        "Stored JWT:",
+        localStorage.getItem("access_token")
       );
 
-      localStorage.setItem(
-        "token",
-        response.access_token
-      );
+      // 3. Update the global context so the app's ProtectedRoute unlocks
+      // (Adjust the arguments here based on what your context expects!)
+      await login(email, password); 
 
-      console.log("Login Success:", response);
-
-      window.location.href = "/dashboard";
+      // 4. Smoothly route to the dashboard without reloading
+      navigate("/dashboard");
 
     } catch (err) {
-      console.error(err);
+      console.error("Login failed:", err);
+      // You might want to add a state here to show an error message on the UI!
     }
   };
 

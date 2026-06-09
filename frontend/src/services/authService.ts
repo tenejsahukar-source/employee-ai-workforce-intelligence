@@ -8,7 +8,7 @@ export const loginUser = async (
   console.log("LOGIN API CALLED");
 
   const response = await axios.post(
-    "http://localhost:8000/login",
+  "http://localhost:8000/auth/login",
     {
       email,
       password,

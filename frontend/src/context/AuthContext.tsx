@@ -1,10 +1,10 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState } from "react";
 
 interface User {
   id: string;
   email: string;
   name: string;
-  role: 'admin' | 'hr' | 'executive';
+  role: "admin" | "hr" | "executive";
 }
 
 interface AuthContextType {
@@ -18,52 +18,45 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const updateUser = (updates: Partial<User>) => {
-    setUser(prev => {
-      if (!prev) return null;
-      const updated = { ...prev, ...updates };
-      localStorage.setItem('user', JSON.stringify(updated));
-      return updated;
-    });
-  };
-
-  useEffect(() => {
-    // Simulate session check
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
-    setIsLoading(false);
-  }, []);
 
   const login = async (email: string, pass: string) => {
-    setIsLoading(true);
-    // Simulated JWT Auth delay
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    const mockUser: User = {
-      id: '1',
-      email,
-      name: 'Sarah Executive',
-      role: 'admin',
-    };
-    
-    setUser(mockUser);
-    localStorage.setItem('user', JSON.stringify(mockUser));
-    setIsLoading(false);
+    // Unlock the application state
+    setUser({
+      id: "usr-001",
+      email: email,
+      name: "Authorized Executive",
+      role: "admin", // or "executive" depending on what your dashboard needs
+    });
   };
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem('user');
+    localStorage.removeItem("token"); // Good practice to clear this on logout!
+  };
+
+  const updateUser = (updates: Partial<User>) => {
+    setUser((prev) =>
+      prev ? { ...prev, ...updates } : null
+    );
   };
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, isLoading, login, logout, updateUser }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        isAuthenticated: !!user,
+        isLoading: false,
+        login,
+        logout,
+        updateUser,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
@@ -71,8 +64,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
+
+  if (!context) {
+    throw new Error(
+      "useAuth must be used within AuthProvider"
+    );
   }
+
   return context;
 }
