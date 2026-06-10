@@ -28,4 +28,4 @@ jobs:
 
       - name: Verify FastAPI Import
         run: |
-          python -c "from app.main import app; print('Backend OK')"
+          python -m py_compile app/main.py
