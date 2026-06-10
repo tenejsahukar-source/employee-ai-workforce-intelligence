@@ -88,8 +88,6 @@ from app.utils.exception_handlers import sqlalchemy_exception_handler
 # =========================================================
 # DATABASE BOOTSTRAP
 # =========================================================
-from app.db.models.prediction import PredictionLog
-
 
 print("TABLES REGISTERED:")
 print(Base.metadata.tables.keys())
