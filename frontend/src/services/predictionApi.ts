@@ -13,7 +13,7 @@ import axios from 'axios';
 // In production set VITE_API_BASE_URL=https://your-api-domain.com
 // ─────────────────────────────────────────────────────────────────────────────
 const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000',
+  baseURL: import.meta.env.VITE_API_BASE_URL ?? 'https://employee-ai-workforce-intelligence.onrender.com',
   timeout: 30_000,
   headers: {
     'Content-Type': 'application/json',
