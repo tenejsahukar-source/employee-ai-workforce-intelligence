@@ -138,7 +138,8 @@ Instrumentator().instrument(app).expose(app)
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "http://localhost:3000",  # if using React dev server
+    "http://localhost:3000", 
+     "https://employee-ai-workforce-intelligence.vercel.app", # if using React dev server
 ]
 
 app.add_middleware(
