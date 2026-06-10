@@ -374,13 +374,15 @@ async def predict_attrition(
         response.headers["X-Trace-ID"]          = str(api_response.prediction_id)
 
         # Dispatch Celery background task for MLOps audit
-        async_prediction_audit.delay({
-            "prediction_id": str(api_response.prediction_id),
-            "employee_id":   emp_id,
-            "prediction":    prediction,
-            "confidence":    probability,
-        })
-
+        try:
+            async_prediction_audit.delay({
+                "prediction_id": str(api_response.prediction_id),
+                "employee_id":   emp_id,
+                "prediction":    prediction,
+                "confidence":    probability,
+            })
+        except Exception as e:
+            logger.warning("Celery audit task skipped: %s", e)
         # Persist inference record to PostgreSQL
         save_prediction(
             db=db,
